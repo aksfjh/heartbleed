@@ -1,5 +1,6 @@
 #!/usr/bin/perl
 
+## =========================== BSD 2 CLAUSE LICENSE ===========================
 ## Copyright (c) 2014, Daniel Heironimus  <aksfjh at gmail dot com>
 ## All rights reserved.
 ## Redistribution and use in source and binary forms, with or without
@@ -39,8 +40,10 @@
 ## juan vazquez - Metasploit module
 ## Sebastiano Di Paola - Metasploit module
 
-## Update April 17, 2014: Addressed bugs brought up by Shannon Simpson and Adrian Hayter
-## http://www.hut3.net/blog/cns---networks-security/2014/04/14/bugs-in-heartbleed-detection-scripts-
+## Update April 17, 2014: Addressed bugs brought up by Shannon Simpson
+## and Adrian Hayter
+## Blog published April 14, 2014
+## http://www.hut3.net/blog/
 
 use strict;
 use warnings;
@@ -187,10 +190,14 @@ sub tls_check {
     }
     debug( 2, "Starting TLS connection - $proto" );
     my %request = (
-        smtp => "STARTTLS\r\n",
-        ftp  => "AUTH TLS\r\n",
-        imap => "a001 STARTTLS\r\n",
-        pop3 => "STLS\r\n",
+        smtp  => "STARTTLS\r\n",
+        ftp   => "AUTH TLS\r\n",
+        imap  => "a001 STARTTLS\r\n",
+        pop3  => "STLS\r\n",
+        xmpp1 => "\<stream:stream xmlns=\'jabber:client\' "
+            . "xmlns:stream=\'http://etherx.jabber.org/streams\' "
+            . "version=\'1.0\' ",
+        xmpp2 => "\<starttls xmlns=\'urn:ietf:params:xml:ns:xmpp-tls\'\/\>",
     );
     if ( $proto =~ m/^ftp$/i ) {
         $data = readPacket($sock);
@@ -249,6 +256,34 @@ sub tls_check {
         $data = readPacket($sock);
         debug( 3, "TLS Acknowledgement - $data" );
         if ( !$data or $data !~ m/a001\sOK/i ) {
+            debug( 1, "Error - IMAP SSL Failed - Wrong request?" );
+            return;
+        }
+    }
+    elsif ( $proto =~ m/^xmpp|jabber$/i ) {
+        $data = readPacket($sock);
+        debug( 3, "TLS Greeting - $data" );
+        if ( !$data or $data !~ m/\sfrom\=\'([\w\.])\'\s/i ) {
+            debug( 1, "Error - XMPP SSL Failed" );
+            return;
+        }
+        if ( $data =~ m/from\=\'(.*?)\'/i ) {
+            $request{'xmpp'} .= "to=\'$1\'\>";
+        }
+        writePacket( $sock, pack( "a*", $request{xmpp1} ) );
+        $data = readPacket($sock);
+        debug( 3, "TLS Acknowledgement - $data" );
+        if (  !$data
+            or $data
+            !~ m/\<starttls xmlns=[\'\"]urn:ietf:params:xml:ns:xmpp-tls[\'\"]/i
+            )
+        {
+            debug( 1, "Error - IMAP SSL Failed - Wrong request?" );
+            return;
+        }
+        writePacket( $sock, pack( "a*", $request{xmpp2} ) );
+        debug( 3, "TLS Acknowledgement - $data" );
+        if ( !$data or $data !~ m/\<proceed/i ) {
             debug( 1, "Error - IMAP SSL Failed - Wrong request?" );
             return;
         }
@@ -811,3 +846,4 @@ sub notnull {
     my $variable = shift @_;
     return !isnull $variable;
 }    # END notnull
+

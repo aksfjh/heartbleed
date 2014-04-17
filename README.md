@@ -3,9 +3,12 @@ heartbleed
 
 PoC perl script
 
+Syntax:
+  heartbleed.pl -h hostname [-p port] [ -o protocol] [-d]
+
 Options:
 
-  -h \< IP or address \> (required)
+  -h \< FQDN or IP address \> (required)
   
   -p \< port number \> (optional, but defaults to 443)
   

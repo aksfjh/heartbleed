@@ -70,7 +70,7 @@ sub start_check {
         return;
     }
     if ( isnull( $Options{'p'} ) ) {
-        debug( 2, "Error - No Port specified, defaulting to 443" );
+        debug( 1, "No Port specified, defaulting to 443" );
         $Options{'p'} = 443;
     }
     my $ssltls = 0;
@@ -111,6 +111,7 @@ sub start_check {
             return;
         }
         $ssltls++;
+        close $sock;
     }
     print "SAFE\n";
 }    # END start_check
@@ -154,6 +155,10 @@ sub readPacket {
         return '\0';
     }
     debug( 2, length($data) . " bytes read from socket" );
+    my $temp = unpack( "H*", $data );
+    $temp =~ s/((?:\w\w){16})/$1\n/g;
+    $temp =~ s/(\w\w)/$1 /g;
+    debug( 6, $temp );
     return $data;
 }    # END readPacket
 
@@ -306,25 +311,29 @@ sub readSSL {
         debug( 0, "Error - Server did not reply" );
     }
     if ( length $header < 5 ) {
-        debug( 0, "Error - Non SSL header returned" );
+        if ( '101110000110000' eq $header ) {
+            debug( 1, "Connection closed by server" );
+        }
+        else { debug( 0, "Error - Non SSL header returned" ); }
         return;
     }
     $type        = unpack( "C*", substr( $header, 0, 1 ) );
     $tls_ver     = unpack( "H*", substr( $header, 1, 2 ) );
     $data_length = unpack( "n*", substr( $header, 3, 2 ) );
     $data_left   = $data_length;
-    if ( $type == 21 ) {
-        $data = readPacket( $sock, $data_length );
-        close $sock;
-        debug( 0,
-                  "Error - SSL Alert - "
-                . unpack( "C*", substr( $data, 0, 1 ) ) . " - "
-                . unpack( "n*", substr( $data, 1, 2 ) ) );
-        return 0;
-    }
     debug( 3, "Type - $type" );
     debug( 3, "TLS Version - $tls_ver" );
     debug( 3, "Data Length - $data_length" );
+
+    if ( $type == 21 ) {
+        $data = readPacket( $sock, $data_length );
+        close $sock;
+        debug( 1,
+                  "Error - SSL Alert - "
+                . unpack( "C*", substr( $data, 0, 1 ) ) . " - "
+                . unpack( "C*", substr( $data, 1, 1 ) ) );
+        return 0;
+    }
     if ( $type == 22 ) {
         $header = readPacket( $sock, 4 );
         $data_left -= 4;
@@ -354,9 +363,11 @@ sub readSSL {
                     "Unknown reply, clearing buffer and attempting to recover"
                 );
                 $data = readPacket( $sock, $data_left );
-                $data = substr( $data, 0, -5 );
+                $data = substr( $data, -4, 4 );
             }
-            if ( $data eq $hello_done ) {
+            if ( $data eq $hello_done
+                or substr( $data, -4, 4 ) eq $hello_done )
+            {
                 debug( 3, "Server hello complete" );
                 last;
             }

@@ -31,7 +31,7 @@ outlaw-daniel-pc# cat /home/dheironimus/TestCode/heartbleed.pl
 ## Riku - Vulnerability discovery
 ## Antti - Vulnerability discovery
 ## Matti - Vulnerability discovery
-## Jesper Jurcenoks - Quality assurance and test sites
+## Jesper Jurcenoks, VP of Research, Critical Watch - Quality assurance; test sites; feedback on input, output, and protocols
 ## Critical Watch research team - Test sites and consultation
 
 ## This script is based on code written by:

@@ -1,3 +1,4 @@
+outlaw-daniel-pc# cat /home/dheironimus/TestCode/heartbleed.pl
 #!/usr/bin/perl
 
 ## =========================== BSD 2 CLAUSE LICENSE ===========================
@@ -30,6 +31,7 @@
 ## Riku - Vulnerability discovery
 ## Antti - Vulnerability discovery
 ## Matti - Vulnerability discovery
+## Jesper Jurcenoks - Quality assurance and test sites
 ## Critical Watch research team - Test sites and consultation
 
 ## This script is based on code written by:
@@ -56,7 +58,7 @@ getopt( 'hpod', \%opts );
 if ( notnull( $opts{'d'} ) and $opts{'d'} =~ /(\d+)/ ) {
     $debug_level = $1;
 }
-else{
+else {
     $debug_level = -1;
 }
 
@@ -82,7 +84,7 @@ sub start_check {
         eval { $sock = getSocket( $Options{'h'}, $Options{'p'} ); };
         if ($@) {
             my $error = $@;
-            if($debug_level < 1){
+            if ( $debug_level < 1 ) {
                 $error =~ s/\sat.*/\n/;
             }
             debug( 0, "Error - Couldn't create socket: " . $error );
@@ -139,7 +141,7 @@ sub writePacket {
 
 sub readPacket {
     my ( $socket, $length ) = @_;
-    my $time = time();
+    my $time    = time();
     my $timeout = 30;
     if ( !$length ) {
         $length  = 1048576;
@@ -156,7 +158,7 @@ sub readPacket {
             alarm 1;
             sysread( $socket, $buffer, 1 );
             $data .= $buffer;
-            if(time() - $time > $timeout or !$data){ last; }
+            if ( time() - $time > $timeout or !$data ) { last; }
         }
         alarm 0;
     };
@@ -185,9 +187,9 @@ sub getSocket {
     debug( 2, "Creating socket to $host:$port" );
     socket( my $socket, AF_INET, SOCK_STREAM, 0 )
         or die("Can't create socket");
-    if(length inet_aton($host) != 4){ die "Domain does not exist";}
-    
-    connect( $socket, pack_sockaddr_in($port, inet_aton($host) ) )
+    if ( length inet_aton($host) != 4 ) { die "Domain does not exist"; }
+
+    connect( $socket, pack_sockaddr_in( $port, inet_aton($host) ) )
         or die("Can't connect to socket");
 
     debug( 2, "Connection successful" );
@@ -328,9 +330,11 @@ sub readSSL {
         if ( '101110000110000' eq $header ) {
             debug( 1, "Connection closed by server" );
         }
-        elsif(length $header > 0) { debug( 0, "Error - Non SSL header returned" ); }
-        else{
-            debug(0, "No response from server");
+        elsif ( length $header > 0 ) {
+            debug( 0, "Error - Non SSL header returned" );
+        }
+        else {
+            debug( 0, "No response from server" );
         }
         return;
     }
@@ -349,7 +353,7 @@ sub readSSL {
                   "Error - SSL Alert - "
                 . unpack( "C*", substr( $data, 0, 1 ) ) . " - "
                 . unpack( "C*", substr( $data, 1, 1 ) ) );
-        
+
         return 0;
     }
     if ( $type == 22 ) {
@@ -376,7 +380,7 @@ sub readSSL {
                 $data = readPacket( $sock, $data_length );
                 $data_left -= $data_length;
             }
-            elsif(substr($data, -4, 4) ne $hello_done) {
+            elsif ( substr( $data, -4, 4 ) ne $hello_done ) {
                 debug( 2,
                     "Unknown reply, clearing buffer and attempting to recover"
                 );
@@ -876,3 +880,4 @@ sub notnull {
     my $variable = shift @_;
     return !isnull $variable;
 }    # END notnull
+

@@ -151,7 +151,7 @@ sub readPacket {
             alarm 1;
             sysread( $socket, $buffer, 1 );
             $data .= $buffer;
-            if(time() - $time > $timeout){ last; }
+            if(time() - $time > $timeout or !$data){ last; }
         }
         alarm 0;
     };
@@ -367,7 +367,7 @@ sub readSSL {
                 $data = readPacket( $sock, $data_length );
                 $data_left -= $data_length;
             }
-            else {
+            elsif(substr($data, -4, 4) ne $hello_done) {
                 debug( 2,
                     "Unknown reply, clearing buffer and attempting to recover"
                 );
@@ -380,6 +380,7 @@ sub readSSL {
                 debug( 3, "Server hello complete" );
                 last;
             }
+
             $header = readPacket( $sock, 5 );
         }
     }

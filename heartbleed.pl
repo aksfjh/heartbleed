@@ -56,6 +56,9 @@ getopt( 'hpod', \%opts );
 if ( notnull( $opts{'d'} ) and $opts{'d'} =~ /(\d+)/ ) {
     $debug_level = $1;
 }
+else{
+    $debug_level = -1;
+}
 start_check(%opts);
 exit(0);
 
@@ -131,10 +134,11 @@ sub writePacket {
 
 sub readPacket {
     my ( $socket, $length ) = @_;
-    my $timeout = 15;
+    my $time = time();
+    my $timeout = 30;
     if ( !$length ) {
         $length  = 1048576;
-        $timeout = 10;
+        $timeout = 20;
     }
     my ( $buffer, $data ) = q{} x 2;
 
@@ -143,10 +147,11 @@ sub readPacket {
             if ($data) { die $data; }
             die;
         };
-        alarm $timeout;
         while ( !$data or length $data < $length ) {
+            alarm 1;
             sysread( $socket, $buffer, 1 );
             $data .= $buffer;
+            if(time() - $time > $timeout){ last; }
         }
         alarm 0;
     };
@@ -283,13 +288,13 @@ sub tls_check {
             !~ m/\<starttls xmlns=[\'\"]urn:ietf:params:xml:ns:xmpp-tls[\'\"]/i
             )
         {
-            debug( 1, "Error - IMAP SSL Failed - Wrong request?" );
+            debug( 1, "Error - XMPP SSL Failed - Wrong request?" );
             return;
         }
         writePacket( $sock, pack( "a*", $request{xmpp2} ) );
         debug( 3, "TLS Acknowledgement - $data" );
         if ( !$data or $data !~ m/\<proceed/i ) {
-            debug( 1, "Error - IMAP SSL Failed - Wrong request?" );
+            debug( 1, "Error - XMPP SSL Failed - Wrong request?" );
             return;
         }
     }
@@ -314,7 +319,10 @@ sub readSSL {
         if ( '101110000110000' eq $header ) {
             debug( 1, "Connection closed by server" );
         }
-        else { debug( 0, "Error - Non SSL header returned" ); }
+        elsif(length $header > 0) { debug( 0, "Error - Non SSL header returned" ); }
+        else{
+            debug(0, "No response from server");
+        }
         return;
     }
     $type        = unpack( "C*", substr( $header, 0, 1 ) );
@@ -332,6 +340,7 @@ sub readSSL {
                   "Error - SSL Alert - "
                 . unpack( "C*", substr( $data, 0, 1 ) ) . " - "
                 . unpack( "C*", substr( $data, 1, 1 ) ) );
+        
         return 0;
     }
     if ( $type == 22 ) {
@@ -838,7 +847,7 @@ sub debug {
     else {
         $prefix = 'Debug ' . ( $level - 1 ) . ': ';
     }
-    if ( $level <= $debug_level + 1 ) {
+    if ( $level <= $debug_level ) {
         foreach my $line (@output) {
             print $prefix . $line . "\n";
         }

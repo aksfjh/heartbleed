@@ -59,6 +59,7 @@ if ( notnull( $opts{'d'} ) and $opts{'d'} =~ /(\d+)/ ) {
 else{
     $debug_level = -1;
 }
+
 start_check(%opts);
 exit(0);
 
@@ -80,7 +81,11 @@ sub start_check {
     while ( $ssltls < 3 ) {
         eval { $sock = getSocket( $Options{'h'}, $Options{'p'} ); };
         if ($@) {
-            debug( 0, "Error - Couldn't create socket: " . $@ );
+            my $error = $@;
+            if($debug_level < 1){
+                $error =~ s/\sat.*/\n/;
+            }
+            debug( 0, "Error - Couldn't create socket: " . $error );
             return;
         }
 
@@ -169,6 +174,7 @@ sub readPacket {
 
 sub getSocket {
     my ( $host, $port ) = @_;
+    no warnings 'uninitialized';
     if ($port) {
         $port =~ s/.*?(\d+).*?/$1/;
     }
@@ -179,10 +185,13 @@ sub getSocket {
     debug( 2, "Creating socket to $host:$port" );
     socket( my $socket, AF_INET, SOCK_STREAM, 0 )
         or die("Can't create socket");
-
-    connect( $socket, pack_sockaddr_in( $port, inet_aton($host) ) )
+    if(length inet_aton($host) != 4){ die "Domain does not exist";}
+    
+    connect( $socket, pack_sockaddr_in($port, inet_aton($host) ) )
         or die("Can't connect to socket");
+
     debug( 2, "Connection successful" );
+    use warnings;
     return $socket;
 }    # END getSocket
 
@@ -867,4 +876,3 @@ sub notnull {
     my $variable = shift @_;
     return !isnull $variable;
 }    # END notnull
-

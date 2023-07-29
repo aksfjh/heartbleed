@@ -1,6 +1,3 @@
-outlaw-daniel-pc# cat /home/dheironimus/TestCode/heartbleed.pl
-#!/usr/bin/perl
-
 ## =========================== BSD 2 CLAUSE LICENSE ===========================
 ## Copyright (c) 2014, Daniel Heironimus  <aksfjh at gmail dot com>
 ## All rights reserved.
